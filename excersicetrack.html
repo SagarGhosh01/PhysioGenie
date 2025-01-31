@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Exercise Detection</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tensorflow/4.10.0/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
+    <style>
+        .detection-container {
+            background: white;
+            padding: 2rem;
+            border-radius: 16px;
+            box-shadow: 0 4px 6px -1px rgba(85, 139, 47, 0.2);
+            margin: 2rem auto;
+            max-width: 800px;
+            text-align: center;
+        }
+
+        .video-container {
+            position: relative;
+            margin: 1rem auto;
+            max-width: 640px;
+        }
+
+        #webcam, #canvas {
+            width: 100%;
+            max-width: 640px;
+            border-radius: 8px;
+        }
+
+        #canvas {
+            position: absolute;
+            left: 0;
+            top: 0;
+        }
+
+        .status {
+            margin: 1rem 0;
+            padding: 1rem;
+            border-radius: 8px;
+            background: #f1f8e9;
+            color: #33691e;
+            font-weight: 500;
+        }
+
+        .counter {
+            font-size: 2rem;
+            color: #558b2f;
+            margin: 1rem 0;
+        }
+
+        .exercise-select {
+            padding: 0.75rem;
+            border: 1px solid #aed581;
+            border-radius: 8px;
+            font-size: 1rem;
+            margin: 1rem 0;
+            width: 100%;
+            max-width: 300px;
+        }
+
+        #startBtn {
+            background: #558b2f;
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin: 1rem 0;
+        }
+
+        #startBtn:hover {
+            background: #33691e;
+        }
+    </style>
+</head>
+<body>
+    <div class="detection-container">
+        <h2>Real-time Exercise Detection</h2>
+        <select class="exercise-select" id="exerciseSelect">
+            <option value="squat">Squats</option>
+            <option value="pushup">Push-ups</option>
+            <option value="lunge">Lunges</option>
+        </select>
+        <button id="startBtn">Start Detection</button>
+        <div class="video-container">
+            <video id="webcam" autoplay playsinline></video>
+            <canvas id="canvas"></canvas>
+        </div>
+        <div class="status" id="status">Preparing detection system...</div>
+        <div class="counter">Reps: <span id="repCounter">0</span></div>
+    </div>
+
+    <script>
+        let detector;
+        let poses;
+        let video;
+        let canvas;
+        let ctx;
+        let repCount = 0;
+        let isInPosition = false;
+        let selectedExercise = 'squat';
+
+        async function setupCamera() {
+            video = document.getElementById('webcam');
+            canvas = document.getElementById('canvas');
+            ctx = canvas.getContext('2d');
+
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { width: 640, height: 480 }, 
+                audio: false 
+            });
+            video.srcObject = stream;
+
+            return new Promise(resolve => {
+                video.onloadedmetadata = () => {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    resolve(video);
+                };
+            });
+        }
+
+        async function initDetector() {
+            const model = poseDetection.SupportedModels.MoveNet;
+            const detectorConfig = {
+                modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING
+            };
+            detector = await poseDetection.createDetector(model, detectorConfig);
+        }
+
+        function isSquatPosition(keypoints) {
+            const hip = keypoints[11];
+            const knee = keypoints[13];
+            const ankle = keypoints[15];
+
+            if (hip && knee && ankle) {
+                const hipHeight = hip.y;
+                const kneeHeight = knee.y;
+                const ankleHeight = ankle.y;
+
+                // Check if hips are lowered (squat position)
+                return (kneeHeight - hipHeight) < 50;
+            }
+            return false;
+        }
+
+        function isPushupPosition(keypoints) {
+            const shoulder = keypoints[5];
+            const elbow = keypoints[7];
+            const wrist = keypoints[9];
+
+            if (shoulder && elbow && wrist) {
+                const elbowAngle = Math.abs(
+                    Math.atan2(wrist.y - elbow.y, wrist.x - elbow.x) -
+                    Math.atan2(shoulder.y - elbow.y, shoulder.x - elbow.x)
+                );
+
+                return elbowAngle < Math.PI / 4; // Less than 45 degrees
+            }
+            return false;
+        }
+
+        function isLungePosition(keypoints) {
+            const hipLeft = keypoints[11];
+            const kneeLeft = keypoints[13];
+            const hipRight = keypoints[12];
+            const kneeRight = keypoints[14];
+
+            if (hipLeft && kneeLeft && hipRight && kneeRight) {
+                const heightDiff = Math.abs(hipLeft.y - hipRight.y);
+                return heightDiff > 50; // Significant height difference between hips
+            }
+            return false;
+        }
+
+        function checkExercisePosition(keypoints) {
+            switch(selectedExercise) {
+                case 'squat':
+                    return isSquatPosition(keypoints);
+                case 'pushup':
+                    return isPushupPosition(keypoints);
+                case 'lunge':
+                    return isLungePosition(keypoints);
+                default:
+                    return false;
+            }
+        }
+
+        async function detectPose() {
+            poses = await detector.estimatePoses(video);
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            if (poses.length > 0) {
+                // Draw keypoints
+                poses[0].keypoints.forEach(keypoint => {
+                    if (keypoint.score > 0.3) {
+                        ctx.beginPath();
+                        ctx.arc(keypoint.x, keypoint.y, 5, 0, 2 * Math.PI);
+                        ctx.fillStyle = '#558b2f';
+                        ctx.fill();
+                    }
+                });
+
+                // Check exercise position
+                const currentPosition = checkExercisePosition(poses[0].keypoints);
+                
+                if (currentPosition && !isInPosition) {
+                    isInPosition = true;
+                    repCount++;
+                    document.getElementById('repCounter').textContent = repCount;
+                    document.getElementById('status').textContent = 
+                        Great form! Rep ${repCount} completed!;
+                } else if (!currentPosition) {
+                    isInPosition = false;
+                }
+            }
+
+            requestAnimationFrame(detectPose);
+        }
+
+        async function startDetection() {
+            try {
+                await setupCamera();
+                await initDetector();
+                document.getElementById('status').textContent = 'Detection started! Perform your exercise.';
+                detectPose();
+            } catch (error) {
+                console.error(error);
+                document.getElementById('status').textContent = 
+                    'Error starting detection system. Please check camera permissions.';
+            }
+        }
+
+        document.getElementById('startBtn').addEventListener('click', startDetection);
+        document.getElementById('exerciseSelect').addEventListener('change', (e) => {
+            selectedExercise = e.target.value;
+            repCount = 0;
+            document.getElementById('repCounter').textContent = '0';
+            document.getElementById('status').textContent = 
+                Selected exercise changed to ${selectedExercise}. Ready to detect!;
+        });
+    </script>
+</body>
+</html>
